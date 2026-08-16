@@ -91,6 +91,7 @@ def activate_with_pairing(db: Session, code: str, device_info: dict) -> Activati
         record.status = FAILED
         record.disconnect_reason = "pairing_token_expired"
         audit(db, "pairing_failed", session_id=record.id, details={"reason": "expired"})
+        db.flush()
         raise ValueError("pairing code expired")
 
     device = _resolve_device(db, device_info, now)
@@ -103,6 +104,7 @@ def activate_with_pairing(db: Session, code: str, device_info: dict) -> Activati
     record.status = ACTIVE
     device.current_session_id = record.id
     audit(db, "pairing_success", session_id=record.id, device_id=device.id)
+    db.flush()
     return ActivationResult(record, device, reconnect_token)
 
 
@@ -132,6 +134,7 @@ def expire_session(db: Session, record: SessionRecord, *, reason: str = "expired
         if device and device.current_session_id == record.id:
             device.current_session_id = None
     audit(db, "session_expired", session_id=record.id, device_id=record.device_id, details={"reason": reason})
+    db.flush()
 
 
 def expire_due_sessions(db: Session) -> list[str]:
@@ -158,6 +161,7 @@ def revoke_session(db: Session, record: SessionRecord, reason: str = "manual_dis
         if device and device.current_session_id == record.id:
             device.current_session_id = None
     audit(db, "session_revoked", session_id=record.id, device_id=record.device_id, details={"reason": reason})
+    db.flush()
 
 
 def active_session_for_device(db: Session, device_id: str) -> SessionRecord | None:
