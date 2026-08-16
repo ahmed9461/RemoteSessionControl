@@ -1,0 +1,1 @@
+"""Messaging-channel adapter contracts."""

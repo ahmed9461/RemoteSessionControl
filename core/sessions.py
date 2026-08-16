@@ -59,6 +59,29 @@ def create_session(db: Session, duration_seconds: int) -> tuple[SessionRecord, s
     return record, code
 
 
+def _resolve_device(db: Session, device_info: dict, now: datetime) -> Device:
+    instance_id = str(device_info.get("instance_id") or "")[:64] or None
+    device = db.scalar(select(Device).where(Device.instance_id == instance_id)) if instance_id else None
+    if device is None:
+        device = Device(id=str(uuid4()), instance_id=instance_id, name="Unnamed device", platform="unknown")
+        db.add(device)
+        db.flush()
+    elif device.current_session_id:
+        old_session = db.get(SessionRecord, device.current_session_id)
+        if old_session and old_session.status == ACTIVE:
+            old_expiry = _as_utc(old_session.expires_at)
+            if old_expiry and old_expiry > now:
+                raise ValueError("device already has an active session")
+            expire_session(db, old_session, reason="expired_before_new_pairing")
+
+    device.name = str(device_info.get("name") or device.name or "Unnamed device")[:200]
+    device.platform = str(device_info.get("platform") or device.platform or "unknown")[:64]
+    device.platform_version = str(device_info.get("platform_version") or "")[:200]
+    device.client_version = str(device_info.get("client_version") or "0.1.0")[:32]
+    device.last_seen = now
+    return device
+
+
 def activate_with_pairing(db: Session, code: str, device_info: dict) -> ActivationResult:
     now = utcnow()
     record = db.scalar(select(SessionRecord).where(SessionRecord.pairing_token_hash == token_hash(code)))
@@ -70,17 +93,7 @@ def activate_with_pairing(db: Session, code: str, device_info: dict) -> Activati
         audit(db, "pairing_failed", session_id=record.id, details={"reason": "expired"})
         raise ValueError("pairing code expired")
 
-    device = Device(
-        id=str(uuid4()),
-        name=str(device_info.get("name") or "Unnamed device")[:200],
-        platform=str(device_info.get("platform") or "unknown")[:64],
-        platform_version=str(device_info.get("platform_version") or "")[:200],
-        client_version=str(device_info.get("client_version") or "0.1.0")[:32],
-        last_seen=now,
-    )
-    db.add(device)
-    db.flush()
-
+    device = _resolve_device(db, device_info, now)
     reconnect_token = generate_reconnect_token()
     record.device_id = device.id
     record.paired_at = now

@@ -1,0 +1,29 @@
+name: Build visible device clients
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: RemoteSessionControl-Windows
+          - os: macos-latest
+            artifact: RemoteSessionControl-macOS
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt pyinstaller
+      - run: pyinstaller --onefile --name RemoteSessionControl-Client apps/device_client/main.py --paths . --collect-all imageio_ffmpeg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/RemoteSessionControl-Client*
+          if-no-files-found: error

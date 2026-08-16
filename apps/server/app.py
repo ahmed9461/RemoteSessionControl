@@ -11,18 +11,11 @@ from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile, W
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from core.commands import (
-    DISCONNECT,
-    SESSION_STATUS,
-    complete_command,
-    create_command,
-    mark_sent,
-    queued_commands,
-)
+from core.commands import DISCONNECT, SESSION_STATUS, complete_command, create_command, mark_sent, queued_commands
 from core.config import get_settings
-from core.database import SessionLocal, db_session, init_db
+from core.database import db_session, init_db
+from core.identity import bootstrap_identities
 from core.media import cleanup_expired_media, save_upload
 from core.models import CommandRecord, Device, MediaRecord, SessionRecord
 from core.security import constant_time_equal
@@ -52,6 +45,8 @@ class CommandCreate(BaseModel):
 
 
 def owner_guard(x_owner_key: Annotated[str | None, Header()] = None) -> None:
+    if settings.owner_api_key == "change-me":
+        raise HTTPException(status_code=503, detail="RSC_OWNER_API_KEY must be configured")
     if not x_owner_key or not constant_time_equal(x_owner_key, settings.owner_api_key):
         raise HTTPException(status_code=401, detail="unauthorized")
 
@@ -88,7 +83,6 @@ def command_dict(row: CommandRecord) -> dict:
 async def maintenance_loop() -> None:
     while True:
         await asyncio.sleep(5)
-        expired_devices: list[str] = []
         with db_session() as db:
             expired_devices = expire_due_sessions(db)
             cleanup_expired_media(db)
@@ -100,6 +94,8 @@ async def maintenance_loop() -> None:
 async def lifespan(app: FastAPI):
     init_db()
     Path(settings.media_dir).mkdir(parents=True, exist_ok=True)
+    with db_session() as db:
+        bootstrap_identities(db)
     task = asyncio.create_task(maintenance_loop())
     try:
         yield
@@ -124,11 +120,7 @@ def api_create_session(body: SessionCreate) -> dict:
     with db_session() as db:
         row, pairing_code = create_session(db, body.duration_seconds)
         db.flush()
-        return {
-            "session": session_dict(row),
-            "pairing_code": pairing_code,
-            "pairing_ttl_seconds": settings.pairing_ttl_seconds,
-        }
+        return {"session": session_dict(row), "pairing_code": pairing_code, "pairing_ttl_seconds": settings.pairing_ttl_seconds}
 
 
 @app.get("/api/v1/sessions", dependencies=[Depends(owner_guard)])
@@ -178,12 +170,7 @@ async def api_create_command(device_id: str, body: CommandCreate) -> dict:
 
         if row.name == SESSION_STATUS:
             session = db.get(SessionRecord, row.session_id)
-            complete_command(
-                db,
-                row.id,
-                success=True,
-                result={"session": session_dict(session) if session else None},
-            )
+            complete_command(db, row.id, success=True, result={"session": session_dict(session) if session else None})
             db.flush()
             return command_dict(row)
 
@@ -284,7 +271,7 @@ async def device_ws(websocket: WebSocket) -> None:
                 return
 
             expires_at = record.expires_at
-            pending = queued_commands(db, device_id)
+            pending_ids = [row.id for row in queued_commands(db, device_id)]
 
         await manager.connect(device_id, websocket)
         await websocket.send_json(
@@ -298,10 +285,15 @@ async def device_ws(websocket: WebSocket) -> None:
             }
         )
 
-        for command in pending:
-            if await manager.send_json(device_id, command_envelope(command)):
+        for command_id in pending_ids:
+            with db_session() as db:
+                command = db.get(CommandRecord, command_id)
+                if command is None or command.status != "queued":
+                    continue
+                envelope = command_envelope(command)
+            if await manager.send_json(device_id, envelope):
                 with db_session() as db:
-                    current = db.get(CommandRecord, command.id)
+                    current = db.get(CommandRecord, command_id)
                     if current:
                         mark_sent(db, current)
 
@@ -310,6 +302,9 @@ async def device_ws(websocket: WebSocket) -> None:
             msg_type = message.get("type")
             if msg_type == "heartbeat":
                 with db_session() as db:
+                    session = validate_reconnect_token(db, reconnect_token)
+                    if session.id != session_id:
+                        raise ValueError("session mismatch")
                     device = db.get(Device, device_id)
                     if device:
                         device.last_seen = datetime.now(timezone.utc)
@@ -342,6 +337,12 @@ async def device_ws(websocket: WebSocket) -> None:
 
     except (WebSocketDisconnect, asyncio.TimeoutError):
         pass
+    except ValueError as exc:
+        try:
+            await websocket.send_json(error_envelope("session_invalid", str(exc)))
+            await websocket.close(code=4401)
+        except Exception:
+            pass
     except Exception:
         try:
             await websocket.close(code=1011)

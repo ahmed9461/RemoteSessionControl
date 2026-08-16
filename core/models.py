@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.database import Base
@@ -12,10 +12,31 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class Owner(Base):
+    __tablename__ = "owners"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(200), default="Owner")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ChannelIdentity(Base):
+    __tablename__ = "channel_identities"
+    __table_args__ = (UniqueConstraint("channel", "external_id", name="uq_channel_external_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("owners.id"), index=True)
+    channel: Mapped[str] = mapped_column(String(50), index=True)
+    external_id: Mapped[str] = mapped_column(String(200), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Device(Base):
     __tablename__ = "devices"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    instance_id: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(200))
     platform: Mapped[str] = mapped_column(String(64))
     platform_version: Mapped[str] = mapped_column(String(200), default="")

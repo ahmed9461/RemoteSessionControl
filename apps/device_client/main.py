@@ -3,14 +3,18 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import platform
 import socket
 import tempfile
+import time
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 import imageio.v2 as imageio
 import mss
+import mss.tools
 import numpy as np
 import psutil
 import websockets
@@ -20,8 +24,30 @@ from protocol import PROTOCOL_VERSION
 CLIENT_VERSION = "0.1.0"
 
 
+def instance_id_path() -> Path:
+    return Path.home() / ".remote_session_control" / "device_id"
+
+
+def load_or_create_instance_id() -> str:
+    path = instance_id_path()
+    if path.exists():
+        value = path.read_text(encoding="utf-8").strip()
+        if value:
+            return value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    value = str(uuid4())
+    path.write_text(value, encoding="utf-8")
+    if os.name != "nt":
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+    return value
+
+
 def device_info() -> dict:
     return {
+        "instance_id": load_or_create_instance_id(),
         "name": socket.gethostname(),
         "platform": platform.system(),
         "platform_version": platform.version(),
@@ -59,11 +85,17 @@ def capture_screenshot(path: Path) -> None:
 def record_screen(path: Path, duration: int, fps: int) -> None:
     duration = min(120, max(1, int(duration)))
     fps = min(10, max(2, int(fps)))
+    interval = 1.0 / fps
     with mss.mss() as sct:
         monitor = sct.monitors[0]
         writer = imageio.get_writer(str(path), fps=fps, codec="libx264", quality=6, macro_block_size=2)
         try:
-            for _ in range(duration * fps):
+            started = time.perf_counter()
+            for frame_index in range(duration * fps):
+                target = started + frame_index * interval
+                delay = target - time.perf_counter()
+                if delay > 0:
+                    time.sleep(delay)
                 frame = np.asarray(sct.grab(monitor))[:, :, :3]
                 frame = frame[:, :, ::-1]
                 writer.append_data(frame)
@@ -73,7 +105,7 @@ def record_screen(path: Path, duration: int, fps: int) -> None:
 
 async def upload_media(server_url: str, reconnect_token: str, command_id: str, path: Path, content_type: str) -> str:
     headers = {"Authorization": f"Bearer {reconnect_token}"}
-    async with httpx.AsyncClient(timeout=120) as client:
+    async with httpx.AsyncClient(timeout=180) as client:
         with path.open("rb") as handle:
             response = await client.post(
                 f"{server_url.rstrip('/')}/api/v1/device/media/{command_id}",
@@ -120,11 +152,7 @@ async def client_loop(server_url: str, pairing_code: str) -> None:
     reconnect_token: str | None = None
     keep_running = True
     while keep_running:
-        hello = {
-            "protocol_version": PROTOCOL_VERSION,
-            "type": "hello",
-            "device": device_info(),
-        }
+        hello = {"protocol_version": PROTOCOL_VERSION, "type": "hello", "device": device_info()}
         if reconnect_token:
             hello["reconnect_token"] = reconnect_token
         else:
@@ -153,6 +181,10 @@ async def client_loop(server_url: str, pairing_code: str) -> None:
                         message = json.loads(raw)
                         if message.get("type") == "session_ended":
                             print(f"Session ended: {message.get('reason')}")
+                            keep_running = False
+                            break
+                        if message.get("type") == "error" and message.get("code") == "session_invalid":
+                            print(f"Session ended: {message.get('message')}")
                             keep_running = False
                             break
                         if message.get("type") != "command":
