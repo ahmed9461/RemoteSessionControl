@@ -12,7 +12,16 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from core.commands import DISCONNECT, SESSION_STATUS, complete_command, create_command, mark_sent, queued_commands
+from core.commands import (
+    DISCONNECT,
+    RECORD_SCREEN,
+    SCREENSHOT,
+    SESSION_STATUS,
+    complete_command,
+    create_command,
+    mark_sent,
+    queued_commands,
+)
 from core.config import get_settings
 from core.database import db_session, init_db
 from core.identity import bootstrap_identities
@@ -317,13 +326,31 @@ async def device_ws(websocket: WebSocket) -> None:
                     row = db.get(CommandRecord, command_id)
                     if row is None or row.device_id != device_id or row.session_id != session_id:
                         continue
+
+                    success = bool(message.get("success"))
+                    media_id = str(message.get("media_id") or "") or None
+                    error = str(message.get("error"))[:2000] if message.get("error") else None
+
+                    if success and row.name in {SCREENSHOT, RECORD_SCREEN}:
+                        media = db.get(MediaRecord, media_id) if media_id else None
+                        if media is None or media.command_id != command_id:
+                            success = False
+                            media_id = None
+                            error = "missing or invalid media reference"
+                    elif media_id:
+                        media = db.get(MediaRecord, media_id)
+                        if media is None or media.command_id != command_id:
+                            success = False
+                            media_id = None
+                            error = "invalid media reference"
+
                     completed = complete_command(
                         db,
                         command_id,
-                        success=bool(message.get("success")),
+                        success=success,
                         result=message.get("result") if isinstance(message.get("result"), dict) else {},
-                        media_id=message.get("media_id"),
-                        error=str(message.get("error"))[:2000] if message.get("error") else None,
+                        media_id=media_id,
+                        error=error,
                     )
                     should_disconnect = completed.name == DISCONNECT and completed.status == "completed"
                     if should_disconnect:
