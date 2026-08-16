@@ -1,6 +1,14 @@
 name: Build visible device clients
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/device_client/**'
+      - 'protocol/**'
+      - 'core/**'
+      - 'requirements.txt'
+      - '.github/workflows/build-device-clients.yml'
   workflow_dispatch:
 
 jobs:
