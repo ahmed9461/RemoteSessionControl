@@ -17,8 +17,15 @@ This file is authoritative project context for future developers and AI agents.
 13. Channel identities are independent records so Telegram can be enabled/disabled separately from future WhatsApp or web identities.
 14. Architecture must remain extensible; adding a channel must not require a core rewrite.
 15. Security-sensitive changes require tests and documentation updates.
-16. Windows supports three operational launch methods for the same temporary client/session model: one-file EXE, PowerShell launcher, and portable-runtime ZIP.
-17. A fallback launch method must never change privileges, commands, pairing rules, or session expiry.
-18. The PowerShell download path requires HTTPS and SHA-256 verification before starting a downloaded client.
-19. Public client artifacts must never contain Telegram tokens, owner API keys, reconnect tokens, or other server secrets.
-20. Production remote clients use HTTPS/WSS through a reverse proxy; Uvicorn remains bound to loopback.
+16. Windows supports multiple operational launch methods for the same temporary client/session model: one-file EXE, one-click BAT, one-click CMD compatibility launcher, PowerShell launcher, and portable-runtime ZIP.
+17. A fallback launch method must never change privileges, commands, pairing rules, local-consent rules, or session expiry.
+18. Downloaded launchers/clients use HTTPS and SHA-256 verification before execution.
+19. The BAT launcher is the preferred one-click Windows path because it does not depend on PowerShell Execution Policy.
+20. The CMD compatibility launcher may invoke PowerShell with `-ExecutionPolicy Bypass` only for that child process; it must never change machine/user Execution Policy persistently.
+21. Public client artifacts must never contain Telegram tokens, owner API keys, reconnect tokens, or other server secrets.
+22. Production remote clients use HTTPS/WSS through a reverse proxy or equivalent secure ingress; Uvicorn remains bound to loopback.
+23. The Windows core client is intentionally lightweight: NumPy, ImageIO, and Pillow are not part of its screen-capture path.
+24. FFmpeg exists only to encode captured screen frames into H.264/MP4 for screen-recording commands; screenshots, device info, pairing, heartbeats, and disconnect do not require FFmpeg.
+25. On Windows, FFmpeg is a separately published SHA-256-verified helper that is downloaded lazily only when screen recording is requested; the one-file client should not carry the encoder by default.
+26. Portable Windows packaging may include the recorder helper for offline/fallback use while keeping the same command and session model.
+27. Code signing is optional future hardening, not a current runtime requirement.
