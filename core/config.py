@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     public_base_url: str = "http://127.0.0.1:8000"
     server_url: str = "http://127.0.0.1:8000"
     media_dir: str = "data/media"
+    downloads_dir: str = "data/downloads"
     media_ttl_seconds: int = 600
     pairing_ttl_seconds: int = 600
     telegram_token: str = ""
