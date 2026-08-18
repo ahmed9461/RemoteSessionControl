@@ -49,6 +49,10 @@ def test_session_launcher_binds_https_server_code_url_and_hash() -> None:
     assert "$Server = 'https://control.example.com'" in script
     assert "$PairingCode = 'ABCD2345'" in script
     assert "Get-FileHash" in script
+    assert "curl.exe" in script
+    assert "--progress-bar" in script
+    assert "--retry 3" in script
+    assert "Invoke-WebRequest" in script
     assert "Start-Process" in script
     assert "Scheduled Task" not in script
 
