@@ -8,11 +8,11 @@ The server remains the authority for session lifetime regardless of the launch m
 
 ## Method A — Portable one-file EXE (primary)
 
-Artifact: `RemoteSessionControl-Windows`
+Artifact: `RemoteSessionControl-Client.exe`
 
 Purpose:
 
-- Simplest direct launch on Windows.
+- Simplest direct Windows package.
 - No Python installation.
 - No project checkout.
 - No virtual environment.
@@ -28,16 +28,26 @@ The client asks for the one-time pairing code and explicit local consent before 
 
 ## Method B — PowerShell launcher (fallback / convenience)
 
-Script: `scripts/windows/Start-RemoteSession.ps1`
+Generic script: `scripts/windows/Start-RemoteSession.ps1`
 
 The launcher does not implement remote control itself. It only starts the same visible temporary client. It can either:
 
 1. use an already-downloaded EXE via `-ClientPath`, or
 2. download the EXE over HTTPS via `-ClientUrl`.
 
-When `-ExpectedSha256` is supplied, the downloaded/client file is verified before execution.
+When `-ExpectedSha256` is supplied, the client file is verified before execution.
 
-Local-file example:
+The Telegram adapter also supports a **session-specific PowerShell launcher**. After a session is created and production HTTPS/client distribution are ready, pressing `⚡ PowerShell` makes the bot send a small `.ps1` file bound to that short-lived pairing code. The generated launcher:
+
+- downloads the same EXE over HTTPS,
+- reuses a previously downloaded copy only if its SHA-256 still matches,
+- verifies SHA-256 before execution,
+- starts the client as a separate visible process,
+- lets the PowerShell launcher window close after startup,
+- keeps the same server-side session expiry,
+- installs no Windows service, Startup entry, scheduled task, or hidden persistence.
+
+Generic local-file example:
 
 ```powershell
 .\Start-RemoteSession.ps1 `
@@ -45,7 +55,7 @@ Local-file example:
   -ClientPath .\RemoteSessionControl-Client.exe
 ```
 
-Download-and-verify example:
+Generic download-and-verify example:
 
 ```powershell
 .\Start-RemoteSession.ps1 `
@@ -54,23 +64,36 @@ Download-and-verify example:
   -ExpectedSha256 <published-sha256>
 ```
 
-The launcher uses `Start-Process`, so the launcher PowerShell window can be closed after the separate client starts. The client remains visible and still asks for local consent. No Windows service, Startup entry, registry autorun, scheduled task, or hidden persistence is installed.
-
-For remote servers, the launcher rejects plain HTTP. Plain HTTP is accepted only for localhost testing.
+For remote servers, the launcher rejects plain HTTP. Plain HTTP is accepted only by the generic launcher for localhost testing.
 
 ## Method C — Portable runtime directory (fallback)
 
-Artifact: `RemoteSessionControl-Windows-Portable`
+Artifact distributed as: `RemoteSessionControl-Windows-Portable.zip`
 
 This is a PyInstaller `--onedir` package. It contains the client and its bundled runtime/dependencies in a directory. It exists as a compatibility fallback for systems where the single-file executable has extraction or startup issues.
 
-Usage:
+Usage after extraction:
 
 ```powershell
 .\RemoteSessionControl-Portable\RemoteSessionControl-Portable.exe --server https://control.example.com
 ```
 
 It requires no separately installed Python environment.
+
+## Telegram flow
+
+Once `RSC_PUBLIC_BASE_URL` is HTTPS and the Windows artifacts are present in `RSC_DOWNLOADS_DIR`, creating a session can show:
+
+```text
+✅ تم إنشاء جلسة جديدة
+
+🔑 مفتاح الربط: XXXXXXXX
+
+[🪟 Windows EXE] [⚡ PowerShell]
+[📦 Portable]
+```
+
+The EXE and Portable buttons point to the server's fixed allowlisted `/downloads/` files. The PowerShell button sends the session-specific launcher through Telegram. The pairing code is not stored inside the public repository or public client artifacts.
 
 ## Fallback order
 
@@ -88,14 +111,15 @@ The user may choose any method directly. The fallback order is operational conve
 
 ## Distribution design
 
-Production distribution should publish:
+The Windows CI build produces a complete artifact named:
 
-- the Windows one-file client,
-- its SHA-256 checksum,
-- the PowerShell launcher,
-- the Windows portable-runtime ZIP.
+```text
+RemoteSessionControl-Windows-Distribution
+```
 
-The server or a release channel may expose those files only after HTTPS is configured. Do not distribute secrets inside any client artifact. Pairing codes remain short-lived and session-specific.
+It contains the Windows one-file client, SHA-256 file, generic PowerShell launcher, portable-runtime ZIP, and a build manifest. These deployment artifacts contain no Telegram token, owner key, reconnect token, or other server secret.
+
+Production distribution is served by the VPS only after HTTPS/WSS is configured. See `docs/DEPLOYMENT.md`.
 
 ## Security boundaries
 
