@@ -9,7 +9,11 @@ from aiogram.filters import CommandStart
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from core.config import get_settings
-from core.distribution import render_session_powershell_launcher
+from core.distribution import (
+    render_session_batch_launcher,
+    render_session_cmd_wrapper,
+    render_session_powershell_launcher,
+)
 
 settings = get_settings()
 router = Router()
@@ -45,7 +49,14 @@ def session_connection_keyboard(methods: dict | None, pairing_code: str) -> Inli
         windows = methods.get("windows") or {}
         exe = windows.get("exe") or {}
         portable = windows.get("portable") or {}
+        ps_launcher = windows.get("powershell_launcher") or {}
         if exe.get("available") and exe.get("url"):
+            rows.append(
+                [
+                    InlineKeyboardButton(text="🚀 BAT سريع", callback_data=f"bat:{pairing_code}"),
+                    InlineKeyboardButton(text="🧩 CMD تلقائي", callback_data=f"cmdlaunch:{pairing_code}"),
+                ]
+            )
             rows.append(
                 [
                     InlineKeyboardButton(text="🪟 Windows EXE", url=str(exe["url"])),
@@ -54,6 +65,12 @@ def session_connection_keyboard(methods: dict | None, pairing_code: str) -> Inli
             )
         if portable.get("available") and portable.get("url"):
             rows.append([InlineKeyboardButton(text="📦 Portable", url=str(portable["url"]))])
+        if not ps_launcher.get("available"):
+            rows = [
+                [button for button in row if not (button.callback_data or "").startswith("cmdlaunch:")]
+                for row in rows
+            ]
+            rows = [row for row in rows if row]
     rows.append([InlineKeyboardButton(text="↩️ الرئيسية", callback_data="home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -120,14 +137,15 @@ async def create_duration(callback: CallbackQuery) -> None:
         windows = methods.get("windows") or {}
         available = []
         if (windows.get("exe") or {}).get("available"):
-            available.append("EXE")
-        if windows.get("powershell_ready"):
-            available.append("PowerShell")
+            available.extend(["BAT", "EXE", "PowerShell"])
+            if (windows.get("powershell_launcher") or {}).get("available"):
+                available.insert(1, "CMD")
         if (windows.get("portable") or {}).get("available"):
             available.append("Portable")
         if available:
             text += "\n🛟 <b>طرق الاتصال المتاحة:</b> " + " / ".join(available) + "\n"
-            text += "يمكن استخدام أي طريقة؛ كلها تربط نفس الجلسة ولا تغيّر مدة انتهائها.\n"
+            text += "🚀 BAT هو التشغيل السريع المقترح: ملف جاهز بنقرة واحدة ولا يغيّر Execution Policy.\n"
+            text += "🧩 CMD يشغّل PowerShell تلقائيًا بـ Bypass لهذه العملية فقط، بدون تغيير دائم للنظام.\n"
         else:
             text += "\n⚠️ ملفات عميل Windows لم تُنشر على السيرفر بعد.\n"
     else:
@@ -142,19 +160,87 @@ async def create_duration(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+async def _windows_method_material() -> tuple[dict, dict, dict]:
+    methods = await api("GET", "/api/v1/client-methods")
+    if not methods.get("remote_https_ready"):
+        raise RuntimeError("HTTPS/WSS is not ready")
+    windows = methods.get("windows") or {}
+    exe = windows.get("exe") or {}
+    launcher = windows.get("powershell_launcher") or {}
+    if not exe.get("available") or not exe.get("url") or not exe.get("sha256"):
+        raise RuntimeError("Windows EXE is not published on the server")
+    return methods, exe, launcher
+
+
+@router.callback_query(F.data.startswith("bat:"))
+async def batch_launcher(callback: CallbackQuery) -> None:
+    if not allowed(callback.from_user.id):
+        return
+    pairing_code = callback.data.split(":", 1)[1].strip().upper()
+    try:
+        methods, exe, _ = await _windows_method_material()
+        script = render_session_batch_launcher(
+            server_url=str(methods["public_base_url"]),
+            pairing_code=pairing_code,
+            client_url=str(exe["url"]),
+            expected_sha256=str(exe["sha256"]),
+        )
+    except Exception as exc:
+        await callback.answer(f"تعذر تجهيز BAT: {exc}", show_alert=True)
+        return
+
+    filename = f"Start-RemoteSession-{pairing_code}.bat"
+    await callback.message.answer_document(
+        BufferedInputFile(script.encode("ascii"), filename=filename),
+        caption=(
+            "🚀 ملف BAT جاهز لهذه الجلسة.\n"
+            "انقر عليه مرتين؛ يحمل العميل عبر HTTPS، يتحقق من SHA-256، ثم يشغله مع مفتاح الجلسة تلقائيًا.\n"
+            "لا يستخدم PowerShell ولا يغيّر Execution Policy ولا يثبت أي تشغيل دائم."
+        ),
+    )
+    await callback.answer("تم تجهيز BAT السريع")
+
+
+@router.callback_query(F.data.startswith("cmdlaunch:"))
+async def cmd_launcher(callback: CallbackQuery) -> None:
+    if not allowed(callback.from_user.id):
+        return
+    pairing_code = callback.data.split(":", 1)[1].strip().upper()
+    try:
+        methods, exe, launcher = await _windows_method_material()
+        if not launcher.get("available") or not launcher.get("url") or not launcher.get("sha256"):
+            raise RuntimeError("PowerShell launcher is not published on the server")
+        script = render_session_cmd_wrapper(
+            server_url=str(methods["public_base_url"]),
+            pairing_code=pairing_code,
+            client_url=str(exe["url"]),
+            client_sha256=str(exe["sha256"]),
+            powershell_url=str(launcher["url"]),
+            powershell_sha256=str(launcher["sha256"]),
+        )
+    except Exception as exc:
+        await callback.answer(f"تعذر تجهيز CMD: {exc}", show_alert=True)
+        return
+
+    filename = f"Start-RemoteSession-{pairing_code}.cmd"
+    await callback.message.answer_document(
+        BufferedInputFile(script.encode("ascii"), filename=filename),
+        caption=(
+            "🧩 ملف CMD تلقائي لهذه الجلسة.\n"
+            "بنقرة واحدة يشغّل PowerShell بـ ExecutionPolicy Bypass لهذه العملية فقط ثم يعيد استخدام المشغّل الموثق بـ SHA-256.\n"
+            "لا يغيّر سياسة الجهاز أو المستخدم بشكل دائم."
+        ),
+    )
+    await callback.answer("تم تجهيز CMD التلقائي")
+
+
 @router.callback_query(F.data.startswith("ps:"))
 async def powershell_launcher(callback: CallbackQuery) -> None:
     if not allowed(callback.from_user.id):
         return
     pairing_code = callback.data.split(":", 1)[1].strip().upper()
     try:
-        methods = await api("GET", "/api/v1/client-methods")
-        if not methods.get("remote_https_ready"):
-            raise RuntimeError("HTTPS/WSS is not ready")
-        windows = methods.get("windows") or {}
-        exe = windows.get("exe") or {}
-        if not exe.get("available") or not exe.get("url") or not exe.get("sha256"):
-            raise RuntimeError("Windows EXE is not published on the server")
+        methods, exe, _ = await _windows_method_material()
         script = render_session_powershell_launcher(
             server_url=str(methods["public_base_url"]),
             pairing_code=pairing_code,
@@ -169,8 +255,8 @@ async def powershell_launcher(callback: CallbackQuery) -> None:
     await callback.message.answer_document(
         BufferedInputFile(script.encode("utf-8-sig"), filename=filename),
         caption=(
-            "⚡ ملف تشغيل PowerShell لهذه الجلسة.\n"
-            "شغّله على جهاز Windows؛ سيحمّل العميل عبر HTTPS ويتحقق من SHA-256 ثم يطلب موافقة محلية قبل التفعيل.\n"
+            "⚡ ملف PowerShell لهذه الجلسة.\n"
+            "إذا كانت Execution Policy تمنع PS1 استخدم زر 🧩 CMD بدلًا منه؛ CMD يتعامل مع Bypass تلقائيًا لهذه العملية فقط.\n"
             "لا يثبت Service أو Startup أو Scheduled Task."
         ),
     )
