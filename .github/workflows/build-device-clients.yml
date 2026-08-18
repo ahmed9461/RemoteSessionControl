@@ -51,10 +51,30 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $hash = (Get-FileHash dist\RemoteSessionControl-Client.exe -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  RemoteSessionControl-Client.exe" | Set-Content -Encoding ascii dist\RemoteSessionControl-Client.exe.sha256
+          $clientHash = (Get-FileHash dist\RemoteSessionControl-Client.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$clientHash  RemoteSessionControl-Client.exe" | Set-Content -Encoding ascii dist\RemoteSessionControl-Client.exe.sha256
           Copy-Item scripts\windows\Start-RemoteSession.ps1 dist\Start-RemoteSession.ps1
           Compress-Archive -Path dist\RemoteSessionControl-Portable\* -DestinationPath dist\RemoteSessionControl-Windows-Portable.zip -Force
+
+          $portableHash = (Get-FileHash dist\RemoteSessionControl-Windows-Portable.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $launcherHash = (Get-FileHash dist\Start-RemoteSession.ps1 -Algorithm SHA256).Hash.ToLowerInvariant()
+          $manifest = [ordered]@{
+            version = (Get-Content VERSION -Raw).Trim()
+            generated_at_utc = [DateTime]::UtcNow.ToString('o')
+            files = [ordered]@{
+              'RemoteSessionControl-Client.exe' = [ordered]@{ sha256 = $clientHash }
+              'RemoteSessionControl-Windows-Portable.zip' = [ordered]@{ sha256 = $portableHash }
+              'Start-RemoteSession.ps1' = [ordered]@{ sha256 = $launcherHash }
+            }
+          } | ConvertTo-Json -Depth 5
+          $manifest | Set-Content -Encoding utf8 dist\manifest.json
+
+          New-Item -ItemType Directory -Force dist\windows-distribution | Out-Null
+          Copy-Item dist\RemoteSessionControl-Client.exe dist\windows-distribution\
+          Copy-Item dist\RemoteSessionControl-Client.exe.sha256 dist\windows-distribution\
+          Copy-Item dist\RemoteSessionControl-Windows-Portable.zip dist\windows-distribution\
+          Copy-Item dist\Start-RemoteSession.ps1 dist\windows-distribution\
+          Copy-Item dist\manifest.json dist\windows-distribution\
 
       - uses: actions/upload-artifact@v4
         with:
@@ -78,3 +98,12 @@ jobs:
           name: RemoteSessionControl-Windows-Portable
           path: dist/RemoteSessionControl-Windows-Portable.zip
           if-no-files-found: error
+
+      - name: Upload complete Windows distribution bundle
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemoteSessionControl-Windows-Distribution
+          path: dist/windows-distribution/*
+          if-no-files-found: error
+          retention-days: 90
