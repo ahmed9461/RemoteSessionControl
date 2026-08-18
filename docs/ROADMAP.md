@@ -32,9 +32,23 @@
 - Recovery/load/integration tests
 - Signed release process
 
-## Phase 3 — Client packaging
+## Phase 3 — Client packaging 🚧
 
-- Signed Windows installer strategy
+### Windows connection methods
+
+- ✅ Portable one-file EXE
+- ✅ PowerShell launcher that starts the same temporary visible client
+- ✅ Portable `--onedir` runtime fallback
+- ✅ SHA-256 generation for the Windows one-file client
+- 🚧 HTTPS distribution endpoint / release channel
+- 🚧 Telegram connection-method chooser after session creation
+- 🚧 End-to-end Windows test for all three methods
+
+All Windows launch methods must keep the same Protocol v1, command allowlist, explicit consent, server-authoritative expiry, and non-persistent security boundaries. See `docs/CONNECTION_METHODS.md`.
+
+### Later packaging hardening
+
+- Signed Windows release strategy
 - Notarized macOS app strategy
 - Native visible session-status UI
 - Capture-permission diagnostics
