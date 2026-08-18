@@ -27,10 +27,10 @@
 - Alembic migrations
 - PostgreSQL option
 - Structured logging and metrics
-- Reverse-proxy deployment templates
 - Rate limits and richer audit queries
 - Recovery/load/integration tests
 - Signed release process
+- Download/release retention policy
 
 ## Phase 3 — Client packaging 🚧
 
@@ -39,12 +39,19 @@
 - ✅ Portable one-file EXE
 - ✅ PowerShell launcher that starts the same temporary visible client
 - ✅ Portable `--onedir` runtime fallback
-- ✅ SHA-256 generation for the Windows one-file client
-- 🚧 HTTPS distribution endpoint / release channel
-- 🚧 Telegram connection-method chooser after session creation
-- 🚧 End-to-end Windows test for all three methods
+- ✅ SHA-256 generation and verification for the Windows one-file client
+- ✅ Safe allowlisted HTTPS distribution endpoints
+- ✅ Owner-only distribution metadata endpoint
+- ✅ Complete Windows distribution build artifact
+- ✅ Telegram connection-method chooser after session creation
+- ✅ Session-specific PowerShell launcher generation
+- ✅ systemd deployment templates
+- ✅ Caddy HTTPS/WSS reverse-proxy template
+- 🚧 Deploy latest source and Windows artifacts to the VPS
+- 🚧 Configure a real DNS name and HTTPS/WSS
+- 🚧 End-to-end Windows test for all three methods without an SSH tunnel
 
-All Windows launch methods must keep the same Protocol v1, command allowlist, explicit consent, server-authoritative expiry, and non-persistent security boundaries. See `docs/CONNECTION_METHODS.md`.
+All Windows launch methods keep the same Protocol v1, command allowlist, explicit consent, server-authoritative expiry, and non-persistent security boundaries. See `docs/CONNECTION_METHODS.md` and `docs/DEPLOYMENT.md`.
 
 ### Later packaging hardening
 
