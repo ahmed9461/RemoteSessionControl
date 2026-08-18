@@ -1,0 +1,18 @@
+[Unit]
+Description=RemoteSessionControl Telegram Adapter
+After=network-online.target rsc-server.service
+Wants=network-online.target
+Requires=rsc-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/RemoteSessionControl
+ExecStart=/opt/RemoteSessionControl/.venv/bin/python -m apps.telegram.bot
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
