@@ -24,6 +24,7 @@ from core.commands import (
 )
 from core.config import get_settings
 from core.database import db_session, init_db
+from core.distribution import artifact_path, distribution_manifest
 from core.identity import bootstrap_identities
 from core.media import cleanup_expired_media, save_upload
 from core.models import CommandRecord, Device, MediaRecord, SessionRecord
@@ -103,6 +104,7 @@ async def maintenance_loop() -> None:
 async def lifespan(app: FastAPI):
     init_db()
     Path(settings.media_dir).mkdir(parents=True, exist_ok=True)
+    Path(settings.downloads_dir).mkdir(parents=True, exist_ok=True)
     with db_session() as db:
         bootstrap_identities(db)
     task = asyncio.create_task(maintenance_loop())
@@ -122,6 +124,26 @@ app = FastAPI(title="RemoteSessionControl", version="0.1.0", lifespan=lifespan)
 @app.get("/health")
 def health() -> dict:
     return {"ok": True, "protocol_version": PROTOCOL_VERSION}
+
+
+@app.get("/api/v1/client-methods", dependencies=[Depends(owner_guard)])
+def api_client_methods() -> dict:
+    return distribution_manifest(settings.downloads_dir, settings.public_base_url)
+
+
+@app.get("/downloads/{filename}")
+def public_client_download(filename: str):
+    try:
+        path = artifact_path(settings.downloads_dir, filename)
+    except ValueError as exc:
+        raise HTTPException(404, "download not found") from exc
+    if not path.is_file():
+        raise HTTPException(404, "download not found")
+    return FileResponse(
+        path,
+        filename=filename,
+        headers={"Cache-Control": "public, max-age=300"},
+    )
 
 
 @app.post("/api/v1/sessions", dependencies=[Depends(owner_guard)])
