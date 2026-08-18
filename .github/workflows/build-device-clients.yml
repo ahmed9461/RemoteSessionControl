@@ -7,6 +7,7 @@ on:
       - 'apps/device_client/**'
       - 'protocol/**'
       - 'core/**'
+      - 'scripts/windows/**'
       - 'requirements.txt'
       - '.github/workflows/build-device-clients.yml'
   workflow_dispatch:
@@ -29,9 +30,51 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: pip install -r requirements.txt pyinstaller
-      - run: pyinstaller --onefile --name RemoteSessionControl-Client apps/device_client/main.py --paths . --collect-all imageio_ffmpeg
+
+      - name: Build one-file client
+        run: pyinstaller --onefile --name RemoteSessionControl-Client apps/device_client/main.py --paths . --collect-all imageio_ffmpeg
+
+      - name: Validate PowerShell launcher syntax
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $text = Get-Content scripts\windows\Start-RemoteSession.ps1 -Raw
+          [void][scriptblock]::Create($text)
+
+      - name: Build Windows portable runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pyinstaller --onedir --name RemoteSessionControl-Portable apps/device_client/main.py --paths . --collect-all imageio_ffmpeg
+
+      - name: Package Windows fallback methods
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist\RemoteSessionControl-Client.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  RemoteSessionControl-Client.exe" | Set-Content -Encoding ascii dist\RemoteSessionControl-Client.exe.sha256
+          Copy-Item scripts\windows\Start-RemoteSession.ps1 dist\Start-RemoteSession.ps1
+          Compress-Archive -Path dist\RemoteSessionControl-Portable\* -DestinationPath dist\RemoteSessionControl-Windows-Portable.zip -Force
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: dist/RemoteSessionControl-Client*
+          path: |
+            dist/RemoteSessionControl-Client*
+          if-no-files-found: error
+
+      - name: Upload PowerShell launcher
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemoteSessionControl-PowerShell-Launcher
+          path: dist/Start-RemoteSession.ps1
+          if-no-files-found: error
+
+      - name: Upload Windows portable runtime
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemoteSessionControl-Windows-Portable
+          path: dist/RemoteSessionControl-Windows-Portable.zip
           if-no-files-found: error
