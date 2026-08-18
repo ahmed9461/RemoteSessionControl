@@ -9,6 +9,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from core.config import get_settings
+from core.distribution import render_session_powershell_launcher
 
 settings = get_settings()
 router = Router()
@@ -36,6 +37,25 @@ def home_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="📡 الجلسات", callback_data="sessions")],
         ]
     )
+
+
+def session_connection_keyboard(methods: dict | None, pairing_code: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if methods and methods.get("remote_https_ready"):
+        windows = methods.get("windows") or {}
+        exe = windows.get("exe") or {}
+        portable = windows.get("portable") or {}
+        if exe.get("available") and exe.get("url"):
+            rows.append(
+                [
+                    InlineKeyboardButton(text="🪟 Windows EXE", url=str(exe["url"])),
+                    InlineKeyboardButton(text="⚡ PowerShell", callback_data=f"ps:{pairing_code}"),
+                ]
+            )
+        if portable.get("available") and portable.get("url"):
+            rows.append([InlineKeyboardButton(text="📦 Portable", url=str(portable["url"]))])
+    rows.append([InlineKeyboardButton(text="↩️ الرئيسية", callback_data="home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @router.message(CommandStart())
@@ -79,18 +99,82 @@ async def create_duration(callback: CallbackQuery) -> None:
     except Exception as exc:
         await callback.answer(f"تعذر إنشاء الجلسة: {exc}", show_alert=True)
         return
+
+    try:
+        methods = await api("GET", "/api/v1/client-methods")
+    except Exception:
+        methods = None
+
     session = data["session"]
+    pairing_code = str(data["pairing_code"])
     minutes = duration // 60
     text = (
         "✅ <b>تم إنشاء جلسة جديدة</b>\n\n"
-        f"مفتاح الربط: <code>{escape(data['pairing_code'])}</code>\n"
+        f"🔑 مفتاح الربط: <code>{escape(pairing_code)}</code>\n"
         f"صلاحية المفتاح: {data['pairing_ttl_seconds'] // 60} دقائق\n"
         f"مدة الجلسة: {minutes} دقيقة\n\n"
         "⏱ تبدأ مدة الجلسة عند أول تفعيل ناجح على الجهاز.\n"
-        f"Session ID: <code>{escape(session['id'])}</code>"
     )
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="↩️ الرئيسية", callback_data="home")]]))
+
+    if methods and methods.get("remote_https_ready"):
+        windows = methods.get("windows") or {}
+        available = []
+        if (windows.get("exe") or {}).get("available"):
+            available.append("EXE")
+        if windows.get("powershell_ready"):
+            available.append("PowerShell")
+        if (windows.get("portable") or {}).get("available"):
+            available.append("Portable")
+        if available:
+            text += "\n🛟 <b>طرق الاتصال المتاحة:</b> " + " / ".join(available) + "\n"
+            text += "يمكن استخدام أي طريقة؛ كلها تربط نفس الجلسة ولا تغيّر مدة انتهائها.\n"
+        else:
+            text += "\n⚠️ ملفات عميل Windows لم تُنشر على السيرفر بعد.\n"
+    else:
+        text += "\n⚠️ الاتصال المباشر سيظهر بعد تفعيل HTTPS/WSS على السيرفر.\n"
+
+    text += f"\nSession ID: <code>{escape(session['id'])}</code>"
+    await callback.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=session_connection_keyboard(methods, pairing_code),
+    )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ps:"))
+async def powershell_launcher(callback: CallbackQuery) -> None:
+    if not allowed(callback.from_user.id):
+        return
+    pairing_code = callback.data.split(":", 1)[1].strip().upper()
+    try:
+        methods = await api("GET", "/api/v1/client-methods")
+        if not methods.get("remote_https_ready"):
+            raise RuntimeError("HTTPS/WSS is not ready")
+        windows = methods.get("windows") or {}
+        exe = windows.get("exe") or {}
+        if not exe.get("available") or not exe.get("url") or not exe.get("sha256"):
+            raise RuntimeError("Windows EXE is not published on the server")
+        script = render_session_powershell_launcher(
+            server_url=str(methods["public_base_url"]),
+            pairing_code=pairing_code,
+            client_url=str(exe["url"]),
+            expected_sha256=str(exe["sha256"]),
+        )
+    except Exception as exc:
+        await callback.answer(f"تعذر تجهيز PowerShell: {exc}", show_alert=True)
+        return
+
+    filename = f"Start-RemoteSession-{pairing_code}.ps1"
+    await callback.message.answer_document(
+        BufferedInputFile(script.encode("utf-8-sig"), filename=filename),
+        caption=(
+            "⚡ ملف تشغيل PowerShell لهذه الجلسة.\n"
+            "شغّله على جهاز Windows؛ سيحمّل العميل عبر HTTPS ويتحقق من SHA-256 ثم يطلب موافقة محلية قبل التفعيل.\n"
+            "لا يثبت Service أو Startup أو Scheduled Task."
+        ),
+    )
+    await callback.answer("تم تجهيز ملف PowerShell")
 
 
 @router.callback_query(F.data == "devices")
