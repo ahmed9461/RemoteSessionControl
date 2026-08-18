@@ -9,6 +9,7 @@ on:
       - 'core/**'
       - 'scripts/windows/**'
       - 'requirements.txt'
+      - 'requirements-client.txt'
       - '.github/workflows/build-device-clients.yml'
   workflow_dispatch:
 
@@ -32,10 +33,37 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - run: pip install -r requirements.txt pyinstaller
+          cache-dependency-path: requirements-client.txt
+      - run: pip install -r requirements-client.txt pyinstaller
 
-      - name: Build one-file client
-        run: pyinstaller --onefile --name RemoteSessionControl-Client apps/device_client/main.py --paths . --collect-all imageio_ffmpeg
+      - name: Build lightweight Windows core client
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean --onefile --name RemoteSessionControl-Client apps/device_client/main.py --paths . --exclude-module imageio_ffmpeg
+
+      - name: Build macOS client with bundled recorder
+        if: runner.os == 'macOS'
+        run: |
+          pyinstaller --noconfirm --clean --onefile --name RemoteSessionControl-Client apps/device_client/main.py --paths . --hidden-import imageio_ffmpeg --collect-all imageio_ffmpeg
+
+      - name: Extract Windows FFmpeg recording helper and self-test core
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ffmpeg = (python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())").Trim()
+          if (-not (Test-Path $ffmpeg)) { throw "imageio-ffmpeg binary not found: $ffmpeg" }
+          Copy-Item $ffmpeg dist\RemoteSessionControl-FFmpeg.exe
+          & dist\RemoteSessionControl-FFmpeg.exe -version | Select-Object -First 1
+          if ($LASTEXITCODE -ne 0) { throw "FFmpeg helper self-test failed" }
+          & dist\RemoteSessionControl-Client.exe --self-test
+          if ($LASTEXITCODE -ne 0) { throw "Windows core client self-test failed" }
+
+      - name: Self-test macOS client
+        if: runner.os == 'macOS'
+        run: |
+          chmod +x dist/RemoteSessionControl-Client
+          ./dist/RemoteSessionControl-Client --self-test
 
       - name: Validate PowerShell launcher syntax
         if: runner.os == 'Windows'
@@ -48,13 +76,15 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          pyinstaller --onedir --name RemoteSessionControl-Portable apps/device_client/main.py --paths . --collect-all imageio_ffmpeg
+          pyinstaller --noconfirm --clean --onedir --name RemoteSessionControl-Portable apps/device_client/main.py --paths . --exclude-module imageio_ffmpeg
+          Copy-Item dist\RemoteSessionControl-FFmpeg.exe dist\RemoteSessionControl-Portable\RemoteSessionControl-FFmpeg.exe
 
       - name: Package Windows fallback methods
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $clientHash = (Get-FileHash dist\RemoteSessionControl-Client.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $helperHash = (Get-FileHash dist\RemoteSessionControl-FFmpeg.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           "$clientHash  RemoteSessionControl-Client.exe" | Set-Content -Encoding ascii dist\RemoteSessionControl-Client.exe.sha256
           Copy-Item scripts\windows\Start-RemoteSession.ps1 dist\Start-RemoteSession.ps1
           Compress-Archive -Path dist\RemoteSessionControl-Portable\* -DestinationPath dist\RemoteSessionControl-Windows-Portable.zip -Force
@@ -67,6 +97,7 @@ jobs:
             generated_at_utc = [DateTime]::UtcNow.ToString('o')
             files = [ordered]@{
               'RemoteSessionControl-Client.exe' = [ordered]@{ sha256 = $clientHash }
+              'RemoteSessionControl-FFmpeg.exe' = [ordered]@{ sha256 = $helperHash; purpose = 'lazy screen-recording encoder' }
               'RemoteSessionControl-Windows-Portable.zip' = [ordered]@{ sha256 = $portableHash }
               'Start-RemoteSession.ps1' = [ordered]@{ sha256 = $launcherHash }
             }
@@ -76,6 +107,7 @@ jobs:
           New-Item -ItemType Directory -Force dist\windows-distribution | Out-Null
           Copy-Item dist\RemoteSessionControl-Client.exe dist\windows-distribution\
           Copy-Item dist\RemoteSessionControl-Client.exe.sha256 dist\windows-distribution\
+          Copy-Item dist\RemoteSessionControl-FFmpeg.exe dist\windows-distribution\
           Copy-Item dist\RemoteSessionControl-Windows-Portable.zip dist\windows-distribution\
           Copy-Item dist\Start-RemoteSession.ps1 dist\windows-distribution\
           Copy-Item dist\manifest.json dist\windows-distribution\
@@ -135,12 +167,12 @@ jobs:
             gh release edit client-dev \
               --repo "$GITHUB_REPOSITORY" \
               --title "RemoteSessionControl Windows Client (development)" \
-              --notes "Development client distribution built from $GITHUB_SHA. These assets are unsigned development builds; the VPS verifies the published SHA-256 before serving them."
+              --notes "Development client distribution built from $GITHUB_SHA. The lightweight core client lazy-loads the separately verified FFmpeg recorder only when video recording is requested."
           else
             gh release create client-dev dist/windows-distribution/* \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --prerelease \
               --title "RemoteSessionControl Windows Client (development)" \
-              --notes "Development client distribution built from $GITHUB_SHA. These assets are unsigned development builds; the VPS verifies the published SHA-256 before serving them."
+              --notes "Development client distribution built from $GITHUB_SHA. The lightweight core client lazy-loads the separately verified FFmpeg recorder only when video recording is requested."
           fi
