@@ -24,6 +24,7 @@ trap 'rm -rf "$STAGE_DIR"' EXIT
 FILES=(
     RemoteSessionControl-Client.exe
     RemoteSessionControl-Client.exe.sha256
+    RemoteSessionControl-FFmpeg.exe
     RemoteSessionControl-Windows-Portable.zip
     Start-RemoteSession.ps1
     manifest.json
@@ -52,6 +53,7 @@ manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8-sig"))
 files = manifest.get("files") or {}
 expected_names = [
     "RemoteSessionControl-Client.exe",
+    "RemoteSessionControl-FFmpeg.exe",
     "RemoteSessionControl-Windows-Portable.zip",
     "Start-RemoteSession.ps1",
 ]
@@ -76,6 +78,7 @@ print(f"Version: {manifest.get('version', 'unknown')}")
 PY
 
 install -m 0644 "$STAGE_DIR/RemoteSessionControl-Client.exe" "$DOWNLOADS_DIR/RemoteSessionControl-Client.exe"
+install -m 0644 "$STAGE_DIR/RemoteSessionControl-FFmpeg.exe" "$DOWNLOADS_DIR/RemoteSessionControl-FFmpeg.exe"
 install -m 0644 "$STAGE_DIR/RemoteSessionControl-Windows-Portable.zip" "$DOWNLOADS_DIR/RemoteSessionControl-Windows-Portable.zip"
 install -m 0644 "$STAGE_DIR/Start-RemoteSession.ps1" "$DOWNLOADS_DIR/Start-RemoteSession.ps1"
 install -m 0644 "$STAGE_DIR/RemoteSessionControl-Client.exe.sha256" "$DOWNLOADS_DIR/RemoteSessionControl-Client.exe.sha256"
