@@ -32,7 +32,9 @@ FILES=(
 echo "Downloading Windows development distribution from GitHub release '$TAG'..."
 for file in "${FILES[@]}"; do
     echo "  - $file"
-    curl --fail --location --retry 5 --retry-delay 3 \
+    curl --fail --location \
+        --retry 30 --retry-delay 5 --retry-all-errors \
+        --connect-timeout 15 \
         "$BASE_URL/$file" \
         --output "$STAGE_DIR/$file"
 done
