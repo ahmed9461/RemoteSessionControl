@@ -29,3 +29,10 @@
 
 **Decision:** Store a random device identifier locally but keep session credentials in memory.  
 **Reason:** Recognize devices across future sessions without creating a persistent authorization secret.
+
+## ADR-007: Multiple Windows launch methods, one client/session model
+
+**Decision:** Support a one-file EXE, a PowerShell launcher, and a portable-runtime ZIP as operationally interchangeable ways to start the same temporary Windows client.  
+**Reason:** A packaging/startup issue in one method should not require a different protocol, security model, or server architecture. All methods use the same pairing code, Protocol v1, allowlisted commands, audit path, and server-authoritative expiry.
+
+The PowerShell method may download the client only over HTTPS and verifies the published SHA-256 before starting it. None of the launch methods may add hidden persistence, Startup entries, scheduled tasks, arbitrary shell access, or session-expiry bypasses.
