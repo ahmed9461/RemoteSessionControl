@@ -17,3 +17,8 @@ This file is authoritative project context for future developers and AI agents.
 13. Channel identities are independent records so Telegram can be enabled/disabled separately from future WhatsApp or web identities.
 14. Architecture must remain extensible; adding a channel must not require a core rewrite.
 15. Security-sensitive changes require tests and documentation updates.
+16. Windows supports three operational launch methods for the same temporary client/session model: one-file EXE, PowerShell launcher, and portable-runtime ZIP.
+17. A fallback launch method must never change privileges, commands, pairing rules, or session expiry.
+18. The PowerShell download path requires HTTPS and SHA-256 verification before starting a downloaded client.
+19. Public client artifacts must never contain Telegram tokens, owner API keys, reconnect tokens, or other server secrets.
+20. Production remote clients use HTTPS/WSS through a reverse proxy; Uvicorn remains bound to loopback.
