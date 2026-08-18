@@ -15,6 +15,30 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Invoke-RscDownload {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Url,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Destination
+    )
+
+    Write-Host 'Downloading the temporary RemoteSessionControl client (~64 MB)...'
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl) {
+        & $curl.Source --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 --progress-bar --output $Destination $Url
+        if ($LASTEXITCODE -ne 0) {
+            Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+            throw "Client download failed (curl exit code $LASTEXITCODE)."
+        }
+        return
+    }
+
+    Write-Host 'curl.exe was not found; falling back to Invoke-WebRequest.'
+    Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
+}
+
 function Resolve-RscClient {
     param(
         [string]$Path,
@@ -34,8 +58,19 @@ function Resolve-RscClient {
         New-Item -ItemType Directory -Force -Path $workDir | Out-Null
         $resolved = Join-Path $workDir 'RemoteSessionControl-Client.exe'
 
-        Write-Host 'Downloading the temporary RemoteSessionControl client...'
-        Invoke-WebRequest -Uri $Url -OutFile $resolved -UseBasicParsing
+        $download = $true
+        if ($Sha256 -and (Test-Path -LiteralPath $resolved)) {
+            $actual = (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash.ToLowerInvariant()
+            $expected = $Sha256.Trim().ToLowerInvariant()
+            if ($actual -eq $expected) {
+                $download = $false
+                Write-Host 'Using the already downloaded verified client.'
+            }
+        }
+
+        if ($download) {
+            Invoke-RscDownload -Url $Url -Destination $resolved
+        }
     }
     else {
         throw 'Provide either -ClientPath or -ClientUrl.'
