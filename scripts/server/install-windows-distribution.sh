@@ -18,8 +18,8 @@ command -v unzip >/dev/null 2>&1 || {
   echo "unzip is required" >&2
   exit 1
 }
-command -v sha256sum >/dev/null 2>&1 || {
-  echo "sha256sum is required" >&2
+command -v python3 >/dev/null 2>&1 || {
+  echo "python3 is required" >&2
   exit 1
 }
 
@@ -27,38 +27,60 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 unzip -q "$archive" -d "$tmp"
 
-mkdir -p "$target"
-
-copy_named() {
+find_required() {
   local name="$1"
-  local required="${2:-no}"
   local source
   source="$(find "$tmp" -type f -name "$name" -print -quit)"
   if [[ -z "$source" ]]; then
-    if [[ "$required" == "yes" ]]; then
-      echo "Required distribution file missing: $name" >&2
-      exit 1
-    fi
-    return 0
+    echo "Required distribution file missing: $name" >&2
+    exit 1
   fi
-  install -m 0644 "$source" "$target/$name"
+  printf '%s' "$source"
 }
 
-copy_named "RemoteSessionControl-Client.exe" yes
-copy_named "RemoteSessionControl-Client.exe.sha256"
-copy_named "RemoteSessionControl-Windows-Portable.zip"
-copy_named "Start-RemoteSession.ps1"
-copy_named "manifest.json"
+manifest="$(find_required manifest.json)"
+client="$(find_required RemoteSessionControl-Client.exe)"
+helper="$(find_required RemoteSessionControl-FFmpeg.exe)"
+portable="$(find_required RemoteSessionControl-Windows-Portable.zip)"
+launcher="$(find_required Start-RemoteSession.ps1)"
+checksum="$(find_required RemoteSessionControl-Client.exe.sha256)"
 
-if [[ -f "$target/RemoteSessionControl-Client.exe.sha256" ]]; then
-  (
-    cd "$target"
-    sha256sum -c RemoteSessionControl-Client.exe.sha256
-  )
-else
-  echo "Warning: checksum file missing; client was copied without bundle checksum verification." >&2
-fi
+python3 - "$manifest" "$client" "$helper" "$portable" "$launcher" "$checksum" <<'PY'
+from __future__ import annotations
 
+import hashlib
+import json
+import pathlib
+import sys
+
+manifest_path, client, helper, portable, launcher, checksum = map(pathlib.Path, sys.argv[1:])
+manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+files = manifest.get("files") or {}
+paths = {
+    "RemoteSessionControl-Client.exe": client,
+    "RemoteSessionControl-FFmpeg.exe": helper,
+    "RemoteSessionControl-Windows-Portable.zip": portable,
+    "Start-RemoteSession.ps1": launcher,
+}
+for name, path in paths.items():
+    expected = str((files.get(name) or {}).get("sha256") or "").lower()
+    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    if len(expected) != 64 or expected != actual:
+        raise SystemExit(f"SHA-256 verification failed for {name}")
+    print(f"SHA-256 verified: {name}")
+
+line = checksum.read_text(encoding="ascii").strip()
+if not line or line.split()[0].lower() != str(files["RemoteSessionControl-Client.exe"]["sha256"]).lower():
+    raise SystemExit("EXE checksum file does not match manifest.json")
+PY
+
+mkdir -p "$target"
+install -m 0644 "$client" "$target/RemoteSessionControl-Client.exe"
+install -m 0644 "$helper" "$target/RemoteSessionControl-FFmpeg.exe"
+install -m 0644 "$portable" "$target/RemoteSessionControl-Windows-Portable.zip"
+install -m 0644 "$launcher" "$target/Start-RemoteSession.ps1"
+install -m 0644 "$checksum" "$target/RemoteSessionControl-Client.exe.sha256"
+install -m 0644 "$manifest" "$target/manifest.json"
 chmod 0755 "$target"
 
 echo "Windows distribution installed in: $target"
