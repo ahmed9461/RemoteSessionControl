@@ -24,7 +24,7 @@ function Invoke-RscDownload {
         [string]$Destination
     )
 
-    Write-Host 'Downloading the temporary RemoteSessionControl client (~64 MB)...'
+    Write-Host 'Downloading the temporary RemoteSessionControl client...'
     $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
     if ($curl) {
         & $curl.Source --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 --progress-bar --output $Destination $Url
