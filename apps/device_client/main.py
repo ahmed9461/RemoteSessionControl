@@ -23,6 +23,8 @@ import websockets
 from protocol import PROTOCOL_VERSION
 
 CLIENT_VERSION = "0.1.0"
+WINDOWS_RECORDING_HELPER = "RemoteSessionControl-FFmpeg.exe"
+WINDOWS_BUILD_MANIFEST = "manifest.json"
 
 
 def instance_id_path() -> Path:
@@ -92,11 +94,7 @@ def _sha256_path(path: Path) -> str:
 
 
 def _bundled_ffmpeg() -> Path | None:
-    """Return a bundled encoder when this platform build intentionally ships one.
-
-    Windows production builds exclude imageio_ffmpeg from the core EXE and receive
-    the encoder lazily as a verified component. macOS builds can still bundle it.
-    """
+    """Return a bundled encoder when this platform build intentionally ships one."""
 
     try:
         module = importlib.import_module("imageio_ffmpeg")
@@ -121,8 +119,39 @@ def _safe_component_url(url: str) -> bool:
     return lowered.startswith("https://") or lowered.startswith("http://127.0.0.1") or lowered.startswith("http://localhost")
 
 
-async def ensure_recording_encoder(component: dict | None) -> Path:
+async def _recording_component_from_server(server_url: str) -> dict | None:
+    if os.name != "nt":
+        return None
+    base = server_url.rstrip("/")
+    manifest_url = f"{base}/downloads/{WINDOWS_BUILD_MANIFEST}"
+    helper_url = f"{base}/downloads/{WINDOWS_RECORDING_HELPER}"
+    if not _safe_component_url(manifest_url) or not _safe_component_url(helper_url):
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            response = await client.get(manifest_url)
+            response.raise_for_status()
+            manifest = response.json()
+    except Exception:
+        return None
+    files = manifest.get("files") if isinstance(manifest, dict) else None
+    helper = (files or {}).get(WINDOWS_RECORDING_HELPER) if isinstance(files, dict) else None
+    expected = str((helper or {}).get("sha256") or "").strip().lower() if isinstance(helper, dict) else ""
+    if len(expected) != 64 or any(char not in "0123456789abcdef" for char in expected):
+        return None
+    return {
+        "available": True,
+        "url": helper_url,
+        "sha256": expected,
+    }
+
+
+async def ensure_recording_encoder(server_url: str, component: dict | None = None) -> Path:
     component = component if isinstance(component, dict) else {}
+    if not component.get("available"):
+        discovered = await _recording_component_from_server(server_url)
+        component = discovered or {}
+
     if component.get("available"):
         url = str(component.get("url") or "")
         expected = str(component.get("sha256") or "").strip().lower()
@@ -163,9 +192,8 @@ async def ensure_recording_encoder(component: dict | None) -> Path:
 def record_screen(path: Path, duration: int, fps: int, ffmpeg_path: Path) -> None:
     """Capture BGRA frames with MSS and pipe them directly into FFmpeg.
 
-    This deliberately avoids NumPy and ImageIO in the core client. On Windows the
-    FFmpeg executable is a separately verified, lazy-loaded helper so normal
-    pairing/screenshot/device-info sessions do not carry the encoder in the EXE.
+    NumPy and ImageIO are intentionally absent from the core capture path. The
+    Windows encoder is downloaded only when video recording is actually requested.
     """
 
     duration = min(120, max(1, int(duration)))
@@ -282,7 +310,7 @@ async def run_command(
             duration = min(120, max(1, int(payload.get("duration", 30))))
             fps = min(10, max(2, int(payload.get("fps", 5))))
             component_map = components if isinstance(components, dict) else {}
-            ffmpeg_path = await ensure_recording_encoder(component_map.get("screen_recorder"))
+            ffmpeg_path = await ensure_recording_encoder(server_url, component_map.get("screen_recorder"))
             with tempfile.TemporaryDirectory(prefix="rsc-") as tmp:
                 path = Path(tmp) / "screen.mp4"
                 await asyncio.to_thread(record_screen, path, duration, fps, ffmpeg_path)
