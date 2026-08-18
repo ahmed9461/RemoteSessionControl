@@ -169,8 +169,12 @@ jobs:
           set -euo pipefail
           latest_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
           if [[ "$latest_sha" != "$GITHUB_SHA" ]]; then
-            echo "Skipping stale build $GITHUB_SHA because main is $latest_sha"
-            exit 0
+            changed="$(gh api "repos/$GITHUB_REPOSITORY/compare/$GITHUB_SHA...$latest_sha" --jq '.files[].filename' || true)"
+            if printf '%s\n' "$changed" | grep -Eq '^(apps/device_client/|protocol/|core/|scripts/windows/|requirements\.txt$|requirements-client\.txt$|\.github/workflows/build-device-clients\.yml$)'; then
+              echo "Skipping stale client build $GITHUB_SHA; relevant build inputs changed on main."
+              exit 0
+            fi
+            echo "Main advanced only in non-client-build files; publishing client build $GITHUB_SHA."
           fi
           if gh release view client-dev --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload client-dev dist/windows-distribution/* --clobber --repo "$GITHUB_REPOSITORY"
