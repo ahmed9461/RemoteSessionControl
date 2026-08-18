@@ -63,6 +63,7 @@ jobs:
           $launcherHash = (Get-FileHash dist\Start-RemoteSession.ps1 -Algorithm SHA256).Hash.ToLowerInvariant()
           $manifest = [ordered]@{
             version = (Get-Content VERSION -Raw).Trim()
+            source_sha = '${{ github.sha }}'
             generated_at_utc = [DateTime]::UtcNow.ToString('o')
             files = [ordered]@{
               'RemoteSessionControl-Client.exe' = [ordered]@{ sha256 = $clientHash }
@@ -110,3 +111,36 @@ jobs:
           path: dist/windows-distribution/*
           if-no-files-found: error
           retention-days: 90
+
+  publish-development-distribution:
+    name: Publish development Windows distribution
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: RemoteSessionControl-Windows-Distribution
+          path: dist/windows-distribution
+
+      - name: Publish mutable development release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view client-dev --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload client-dev dist/windows-distribution/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit client-dev \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "RemoteSessionControl Windows Client (development)" \
+              --notes "Development client distribution built from $GITHUB_SHA. These assets are unsigned development builds; the VPS verifies the published SHA-256 before serving them."
+          else
+            gh release create client-dev dist/windows-distribution/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "RemoteSessionControl Windows Client (development)" \
+              --notes "Development client distribution built from $GITHUB_SHA. These assets are unsigned development builds; the VPS verifies the published SHA-256 before serving them."
+          fi
